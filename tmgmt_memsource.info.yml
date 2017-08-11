@@ -1,0 +1,9 @@
+name: Memsource Cloud Translator
+type: module
+description: 'Localize Drupal websites with the help of professional translation tools.'
+package: Translation Management
+author: Memsource
+core: 8.x
+dependencies:
+  - tmgmt
+configure: entity.tmgmt_translator.collection
