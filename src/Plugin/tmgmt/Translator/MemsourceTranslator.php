@@ -263,7 +263,10 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
     $config = \Drupal::configFactory()->get('tmgmt_memsource.settings');
     $service_url = $this->translator->getSetting('service_url');
     if (!$service_url) {
-      \Drupal::logger('tmgmt_memsource')->warning('Attempt to call Memsource API when service_url is not set: ' . $path);
+      if ($config->get('debug')) {
+        \Drupal::logger('tmgmt_memsource')
+          ->warning('Attempt to call Memsource API when service_url is not set: ' . $path);
+      }
       return array();
     }
     $url = $service_url . '/' . $path;
@@ -488,21 +491,28 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
           $params = [
             'jobPart' => $job_part_id,
           ];
-          $info = $this->sendApiRequest('v8/job/get', 'GET', $params);
-          if ($this->remoteTranslationCompleted($info['status'])) {
-            try {
-              $this->addFileDataToJob($job, $info['status'], $project_id, $job_part_id);
-              $translated++;
-            }
-            catch (TMGMTException $e) {
-              $restart_point = $old_state == 'TranslatableSource' ? 'RestartPoint01' : 'RestartPoint02';
-              $this->sendFileError($restart_point, $project_id, $job_part_id, $job_item->getJob(), $mapping->getRemoteData('RequiredBy'), $e->getMessage());
-              $job->addMessage('Error fetching the job item: @job_item.', ['@job_item' => $job_item->label()], 'error');
-              $errors[] = [
-                'ProjectId' => $project_id,
-                'RestartPoint' => $restart_point,
-              ];
-              continue;
+          $info = [];
+          try {
+            $info = $this->sendApiRequest('v8/job/get', 'GET', $params);
+          } catch (TMGMTException $e) {
+            $job->addMessage('Error fetching the job item: @job_item. Memsource job @job_part_id not found.',
+              ['@job_item' => $job_item->label(), '@job_part_id' => $job_part_id], 'error');
+            $errors[] = 'Memsource job ' . $job_part_id . ' not found, it was probably deleted.';
+          }
+
+          if (array_key_exists('status', $info)) {
+            if ($this->remoteTranslationCompleted($info['status'])) {
+              try {
+                $this->addFileDataToJob($job, $info['status'], $project_id, $job_part_id);
+                $translated++;
+              } catch (TMGMTException $e) {
+                $restart_point = $old_state == 'TranslatableSource' ? 'RestartPoint01' : 'RestartPoint02';
+                $this->sendFileError($restart_point, $project_id, $job_part_id, $job_item->getJob(), $mapping->getRemoteData('RequiredBy'), $e->getMessage());
+                $job->addMessage('Error fetching the job item: @job_item.', ['@job_item' => $job_item->label()], 'error');
+                continue;
+              }
+            } else {
+//              $errors[] = 'Memsource job ' . $job_part_id . ' not completed.';
             }
           }
         }
@@ -511,14 +521,10 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
     catch (TMGMTException $e) {
       \Drupal::logger('tmgmt_memsource')->error('Could not pull translation resources: @error', ['@error' => $e->getMessage()]);
     }
-//    if (!empty($errors)) {
-//      foreach ($errors as $error) {
-//        $this->confirmUpload($error['ProjectId'], $error['RestartPoint']);
-//      }
-//    }
     return [
       'translated' => $translated,
       'untranslated' => count($job->getItems()) - $translated,
+      'errors' => $errors,
     ];
   }
 

@@ -134,17 +134,20 @@ class MemsourceTranslatorUi extends TranslatorPluginUiBase {
     $result = $translator_plugin->fetchTranslatedFiles($job);
     $translated = $result['translated'];
     $untranslated = $result['untranslated'];
-    if ($untranslated == 0 && $translated != 0) {
-      $job->addMessage('Fetched translations for @translated job items.', ['@translated' => $translated]);
-    }
-    elseif ($translated == 0) {
-      drupal_set_message('No job item has been translated yet.');
-    }
-    else {
-      $job->addMessage('Fetched translations for @translated job items, @untranslated are not translated yet.', [
-        '@translated' => $translated,
-        '@untranslated' => $untranslated,
-      ]);
+    $errors = $result['errors'];
+    if (sizeof($errors) == 0) {
+      if ($untranslated == 0 && $translated != 0) {
+        $job->addMessage('Fetched translations for @translated job items.', ['@translated' => $translated]);
+      }
+      elseif ($translated == 0) {
+        drupal_set_message('No job item has been translated yet.');
+      }
+      else {
+        $job->addMessage('Fetched translations for @translated job items, @untranslated are not translated yet.', [
+          '@translated' => $translated,
+          '@untranslated' => $untranslated,
+        ]);
+      }
     }
     tmgmt_write_request_messages($job);
   }
