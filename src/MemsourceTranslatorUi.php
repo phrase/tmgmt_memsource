@@ -2,9 +2,9 @@
 
 namespace Drupal\tmgmt_memsource;
 
-use Drupal\tmgmt\TranslatorPluginUiBase;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\tmgmt\JobInterface;
+use Drupal\tmgmt\TranslatorPluginUiBase;
 
 /**
  * Memsource translator UI.
@@ -65,7 +65,8 @@ class MemsourceTranslatorUi extends TranslatorPluginUiBase {
     $result = $plugin->loginToMemsource();
     if ($result) {
       // login OK
-    } else {
+    }
+    else {
       $form_state->setErrorByName('settings][service_url', t('Login incorrect. Please check the API endpoint, user name and password.'));
     }
   }

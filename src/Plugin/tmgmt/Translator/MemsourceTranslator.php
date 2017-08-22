@@ -2,21 +2,18 @@
 
 namespace Drupal\tmgmt_memsource\Plugin\tmgmt\Translator;
 
-use Drupal\Core\Datetime\DrupalDateTime;
 use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
-use Drupal\Core\Url;
 use Drupal\tmgmt\ContinuousTranslatorInterface;
-use Drupal\tmgmt\Entity\JobItem;
 use Drupal\tmgmt\Entity\RemoteMapping;
+use Drupal\tmgmt\JobInterface;
 use Drupal\tmgmt\JobItemInterface;
 use Drupal\tmgmt\TMGMTException;
+use Drupal\tmgmt\Translator\AvailableResult;
+use Drupal\tmgmt\TranslatorInterface;
 use Drupal\tmgmt\TranslatorPluginBase;
+use GuzzleHttp\ClientInterface;
 use GuzzleHttp\Exception\RequestException;
 use Symfony\Component\DependencyInjection\ContainerInterface;
-use GuzzleHttp\ClientInterface;
-use Drupal\tmgmt\TranslatorInterface;
-use Drupal\tmgmt\JobInterface;
-use Drupal\tmgmt\Translator\AvailableResult;
 
 /**
  * Memsource translation plugin controller.
@@ -96,8 +93,7 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
       foreach ($supported_languages as $language) {
         $supported_remote_languages[$language['code']] = $language['name'];
       }
-    }
-    catch (\Exception $e) {
+    } catch (\Exception $e) {
       // Ignore exception, nothing we can do.
     }
     asort($supported_remote_languages);
@@ -163,13 +159,12 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
           $job_item->active();
         }
       }
-    }
-    catch (TMGMTException $e) {
+    } catch (TMGMTException $e) {
       try {
         $this->sendFileError('RestartPoint03', $project_id, '', $job, $due_date, $e->getMessage(), TRUE);
-      }
-      catch (TMGMTException $e) {
-        \Drupal::logger('tmgmt_memsource')->error('Error sending the error file: @error', ['@error' => $e->getMessage()]);
+      } catch (TMGMTException $e) {
+        \Drupal::logger('tmgmt_memsource')
+          ->error('Error sending the error file: @error', ['@error' => $e->getMessage()]);
       }
       $job->rejected('Job has been rejected with following error: @error',
         ['@error' => $e->getMessage()], 'error');
@@ -181,15 +176,23 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
   }
 
   public function loginToMemsource() {
+    $config = \Drupal::configFactory()->get('tmgmt_memsource.settings');
     $params = [
       'username' => $this->translator->getSetting('memsource_user_name'),
       'password' => $this->translator->getSetting('memsource_password'),
     ];
-    $result = $this->request('v2/auth/login', 'GET', $params);
-    if ($result['token']) {
-      // store the token
-      $this->storeToken($result['token']);
-      return TRUE;
+    try {
+      $result = $this->request('v2/auth/login', 'GET', $params);
+      if ($result['token']) {
+        // store the token
+        $this->storeToken($result['token']);
+        return TRUE;
+      }
+    } catch (TMGMTException $ex) {
+      if ($config->get('debug')) {
+        \Drupal::logger('tmgmt_memsource')
+          ->warning('Unable to log in to Memsource API: ' . $ex->getMessage());
+      }
     }
     return FALSE;
   }
@@ -200,7 +203,9 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
   }
 
   public function getToken() {
-    return \Drupal::configFactory()->get('tmgmt_memsource.settings')->get('memsource_token');
+    return \Drupal::configFactory()
+      ->get('tmgmt_memsource.settings')
+      ->get('memsource_token');
   }
 
   public function verifyToken() {
@@ -225,7 +230,8 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
         $this->loginToMemsource();
         $params['token'] = $this->getToken();
         $result = $this->request($path, $method, $params, $download, $code, $body);
-      } else {
+      }
+      else {
         throw $ex;
       }
     }
@@ -267,14 +273,15 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
         \Drupal::logger('tmgmt_memsource')
           ->warning('Attempt to call Memsource API when service_url is not set: ' . $path);
       }
-      return array();
+      return [];
     }
     $url = $service_url . '/' . $path;
 
     try {
       if ($body) {
         $options['body'] = $body;
-      } else {
+      }
+      else {
         if ($method == 'GET') {
           $options['query'] = $params;
         }
@@ -283,8 +290,7 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
         }
       }
       $response = $this->client->request($method, $url, $options);
-    }
-    catch (RequestException $e) {
+    } catch (RequestException $e) {
       if (!$e->hasResponse()) {
         if ($code) {
           return $e->getCode();
@@ -359,8 +365,6 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
    */
   public function newTranslationProject(JobInterface $job, $due_date) {
     // prepare parameters for Project API
-    $url = Url::fromRoute('tmgmt_memsource.callback');
-    $mail = empty($job->getOwner()->getEmail()) ? \Drupal::config('system.site')->get('mail') : $job->getOwner()->getEmail();
     $name = $job->getSetting('project_name') ?: 'Drupal TMGMT project ' . $job->id();
     $params = [
       'name' => $name,
@@ -371,7 +375,8 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
     $template_id = $job->getSetting('project_template');
     if ($template_id == '0') {
       $result = $this->sendApiRequest('v4/project/create', 'GET', $params);
-    } else {
+    }
+    else {
       $params['template'] = $template_id;
       $result = $this->sendApiRequest('v4/project/createFromTemplate', 'GET', $params);
     }
@@ -394,7 +399,8 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
   private function sendFiles(JobItemInterface $job_item, $project_id, $due_date) {
     /** @var \Drupal\tmgmt_file\Format\FormatInterface $xliff_converter */
     // prepare parameters for Job API
-    $xliff_converter = \Drupal::service('plugin.manager.tmgmt_file.format')->createInstance('xlf');
+    $xliff_converter = \Drupal::service('plugin.manager.tmgmt_file.format')
+      ->createInstance('xlf');
 
     $job_item_id = $job_item->id();
     $target_language = $job_item->getJob()->getRemoteTargetLanguage();
@@ -404,8 +410,6 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
 
     $file_id = $this->uploadFileResource($xliff, $name);
     $job_part_id = $this->createJob($project_id, $file_id, $target_language, $due_date);
-
-//    $this->sendUrl($job_item, $project_id, $file_id, FALSE, $required_by);
 
     return $job_part_id;
   }
@@ -429,8 +433,7 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
       'token' => $this->getToken(),
       'name' => $file_name,
     ];
-//    file_put_contents('/Users/filiprachunek/workspace/' . $file_name, $xliff);
-    $result = $this->sendApiRequest('v2/file/uploadRequestBody?' . http_build_query($form_params), 'POST', [], false, false, $xliff);
+    $result = $this->sendApiRequest('v2/file/uploadRequestBody?' . http_build_query($form_params), 'POST', [], FALSE, FALSE, $xliff);
     return $result['uid'];
   }
 
@@ -447,7 +450,8 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
   }
 
   /**
-   * Parses received translation from Memsource Cloud and returns unflatted data.
+   * Parses received translation from Memsource Cloud and returns unflatted
+   * data.
    *
    * @param string $data
    *   Xliff data, received from Memsource Cloud.
@@ -457,7 +461,8 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
    */
   protected function parseTranslationData($data) {
     /** @var \Drupal\tmgmt_file\Format\FormatInterface $xliff_converter */
-    $xliff_converter = \Drupal::service('plugin.manager.tmgmt_file.format')->createInstance('xlf');
+    $xliff_converter = \Drupal::service('plugin.manager.tmgmt_file.format')
+      ->createInstance('xlf');
     // Import given data using XLIFF converter. Specify that passed content is
     // not a file.
     return $xliff_converter->import($data, FALSE);
@@ -496,7 +501,10 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
             $info = $this->sendApiRequest('v8/job/get', 'GET', $params);
           } catch (TMGMTException $e) {
             $job->addMessage('Error fetching the job item: @job_item. Memsource job @job_part_id not found.',
-              ['@job_item' => $job_item->label(), '@job_part_id' => $job_part_id], 'error');
+              [
+                '@job_item' => $job_item->label(),
+                '@job_part_id' => $job_part_id,
+              ], 'error');
             $errors[] = 'Memsource job ' . $job_part_id . ' not found, it was probably deleted.';
           }
 
@@ -511,15 +519,16 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
                 $job->addMessage('Error fetching the job item: @job_item.', ['@job_item' => $job_item->label()], 'error');
                 continue;
               }
-            } else {
-//              $errors[] = 'Memsource job ' . $job_part_id . ' not completed.';
+            }
+            else {
+              // nothing to do
             }
           }
         }
       }
-    }
-    catch (TMGMTException $e) {
-      \Drupal::logger('tmgmt_memsource')->error('Could not pull translation resources: @error', ['@error' => $e->getMessage()]);
+    } catch (TMGMTException $e) {
+      \Drupal::logger('tmgmt_memsource')
+        ->error('Could not pull translation resources: @error', ['@error' => $e->getMessage()]);
     }
     return [
       'translated' => $translated,
@@ -552,12 +561,13 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
       try {
         $this->addFileDataToJob($job, $info['status'], $remote->getRemoteIdentifier2(), $remote->getRemoteIdentifier3());
         return 1;
-      }
-      catch (TMGMTException $e) {
+      } catch (TMGMTException $e) {
         $restart_point = $old_state == 'TranslatableSource' ? 'RestartPoint01' : 'RestartPoint02';
         $this->sendFileError($restart_point, $remote->getRemoteIdentifier2(), $remote->getRemoteIdentifier3(), $job, $remote->getRemoteData('RequiredBy'), $e->getMessage());
-        $job->addMessage('Error fetching the job item: @job_item.', ['@job_item' => $remote->getJobItem()->label()], 'error');
-//        $this->confirmUpload($remote->getRemoteIdentifier2(), $restart_point);
+        $job->addMessage('Error fetching the job item: @job_item.', [
+          '@job_item' => $remote->getJobItem()
+            ->label(),
+        ], 'error');
       }
     }
     return 0;
@@ -590,21 +600,7 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
    *   If there is a problem with the request.
    */
   public function sendFileError($state, $project_id, $file_id, JobInterface $job, $required_by, $message = '', $confirm = FALSE) {
-    $form_params = [
-      'ProjectId' => $project_id,
-      'RequiredByDateUtc' => $required_by,
-      'SourceLanguage' => $job->getRemoteSourceLanguage(),
-      'TargetLanguage' => $job->getRemoteTargetLanguage(),
-      'FilePathAndName' => 'error-' . (new DrupalDateTime())->format('Y-m-d\TH:i:s') . '.txt',
-      'FileIdToUpdate' => $file_id,
-      'FileState' => $state,
-      'FileData' => base64_encode($message),
-    ];
-    // TODO: handle the error somehow (or maybe not)
-//    $this->request('file', 'PUT', $form_params);
-//    if ($confirm) {
-//      $this->confirmUpload($project_id, $state);
-//    }
+    // use this function to handle the error at the Memsource side (not used now)
   }
 
   /**
@@ -622,13 +618,11 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
    * @throws \Drupal\tmgmt\TMGMTException
    */
   public function addFileDataToJob(JobInterface $job, $state, $project_id, $file_id) {
-    $mail = empty($job->getOwner()->getEmail()) ? \Drupal::config('system.site')->get('mail') : $job->getOwner()->getEmail();
     $params = [
       'jobPart' => $file_id,
     ];
     $data = $this->sendApiRequest('v8/job/getCompletedFile', 'GET', $params, TRUE);
     $decoded_data = $data;
-//    \Drupal::logger('tmgmt_memsource')->debug('Completed file: ' . print_r($decoded_data, true));
     $file_data = $this->parseTranslationData($decoded_data);
     if ($this->remoteTranslationCompleted($state)) {
       $status = TMGMT_DATA_ITEM_STATE_TRANSLATED;
@@ -643,19 +637,10 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
     $mapping->removeRemoteData('TmsState');
     $mapping->addRemoteData('TmsState', $state);
     $mapping->save();
-
-    // If this is a preliminary translation we must send the preview url.
-    if ($status == TMGMT_DATA_ITEM_STATE_PRELIMINARY && $job->getSetting('review')) {
-      foreach (array_keys($file_data) as $job_item_id) {
-        /** @var \Drupal\tmgmt\Entity\JobItem $job_item */
-        $job_item = JobItem::load($job_item_id);
-//        $this->sendUrl($job_item, $project_id, $file_id, TRUE, $mapping->getRemoteData('RequiredBy'));
-      }
-    }
   }
 
   public function containsText($string) {
-    return $string != NULL && $string != "" &&  !ctype_space(preg_replace("/(&nbsp;)/", "", $string));
+    return $string != NULL && $string != "" && !ctype_space(preg_replace("/(&nbsp;)/", "", $string));
   }
 
   public function logDebug($message) {
