@@ -30,7 +30,7 @@ class MemsourceTranslator extends TranslatorPluginBase implements ContainerFacto
   /**
    * The translator.
    *
-   * @var TranslatorInterface
+   * @var \Drupal\tmgmt\TranslatorInterface
    */
   private $translator;
 
